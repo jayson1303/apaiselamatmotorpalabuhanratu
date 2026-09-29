@@ -5,20 +5,29 @@
 
 import { 
   db, 
-  storage, 
   doc, 
   getDoc, 
-  setDoc, 
-  ref, 
-  uploadBytes, 
-  getDownloadURL 
+  setDoc 
 } from "../../js/firebase-config.js";
 
 import { adminAlert } from "./admin-dialogs.js";
+import { 
+  uploadWithFallback, 
+  setupCompressedPreview, 
+  formatAdminImageUrl 
+} from "./image-utils.js";
 
 export async function initAdminHero() {
   const form = document.getElementById("form-hero");
   if (!form) return;
+
+  let currentBackgroundUrl = "";
+  let currentPromoImageUrl = "";
+
+  const fileHeroBg = document.getElementById("file-hero-bg");
+  const previewHeroBg = document.getElementById("preview-hero-bg");
+  const fileHeroPromo = document.getElementById("file-hero-promo");
+  const previewHeroPromo = document.getElementById("preview-hero-promo");
 
   // Load current hero data
   try {
@@ -32,6 +41,9 @@ export async function initAdminHero() {
       data = defaults.hero || {};
     }
 
+    currentBackgroundUrl = data.backgroundUrl || "";
+    currentPromoImageUrl = data.promoImageUrl || "";
+
     // Populate inputs
     document.getElementById("hero-input-title").value = data.title || "";
     document.getElementById("hero-input-subtitle").value = data.subtitle || "";
@@ -39,22 +51,33 @@ export async function initAdminHero() {
     document.getElementById("hero-input-cta").value = data.ctaText || "";
     document.getElementById("hero-promo-active").checked = data.promoActive !== false;
 
-    if (data.backgroundUrl) {
-      document.getElementById("preview-hero-bg").src = data.backgroundUrl;
-      document.getElementById("preview-hero-bg").style.display = "block";
+    if (currentBackgroundUrl && previewHeroBg) {
+      previewHeroBg.src = formatAdminImageUrl(currentBackgroundUrl);
+      previewHeroBg.style.display = "block";
     }
-    if (data.promoImageUrl) {
-      document.getElementById("preview-hero-promo").src = data.promoImageUrl;
-      document.getElementById("preview-hero-promo").style.display = "block";
+    if (currentPromoImageUrl && previewHeroPromo) {
+      previewHeroPromo.src = formatAdminImageUrl(currentPromoImageUrl);
+      previewHeroPromo.style.display = "block";
     }
 
   } catch (e) {
     console.error("Error loading hero data:", e);
   }
 
-  // Preview local file on change
-  setupFilePreview("file-hero-bg", "preview-hero-bg");
-  setupFilePreview("file-hero-promo", "preview-hero-promo");
+  // Setup client-side compressed preview on file selection
+  setupCompressedPreview(fileHeroBg, previewHeroBg, {
+    maxWidth: 1400,
+    maxHeight: 900,
+    quality: 0.78,
+    maxSizeBytes: 140 * 1024
+  });
+
+  setupCompressedPreview(fileHeroPromo, previewHeroPromo, {
+    maxWidth: 1200,
+    maxHeight: 800,
+    quality: 0.8,
+    maxSizeBytes: 120 * 1024
+  });
 
   // Form submit
   form.addEventListener("submit", async (e) => {
@@ -70,31 +93,49 @@ export async function initAdminHero() {
       const ctaText = document.getElementById("hero-input-cta").value.trim();
       const promoActive = document.getElementById("hero-promo-active").checked;
 
-      let bgUrl = document.getElementById("preview-hero-bg").src;
-      let promoUrl = document.getElementById("preview-hero-promo").src;
+      let bgUrl = currentBackgroundUrl;
+      let promoUrl = currentPromoImageUrl;
 
-      const bgFile = document.getElementById("file-hero-bg").files[0];
+      const bgFile = fileHeroBg?.files?.[0];
+      const promoFile = fileHeroPromo?.files?.[0];
+
+      // Upload in parallel if both are selected
+      const uploadTasks = [];
+
       if (bgFile) {
-        try {
-          const bgRef = ref(storage, `hero/bg_${Date.now()}_${bgFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
-          const snap = await uploadBytes(bgRef, bgFile);
-          bgUrl = await getDownloadURL(snap.ref);
-        } catch (e) {
-          console.warn("Storage upload failed for hero bg, using preview src:", e);
-          bgUrl = document.getElementById("preview-hero-bg").src;
-        }
+        uploadTasks.push(
+          (async () => {
+            const bgPath = `hero/bg_${Date.now()}_${bgFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+            bgUrl = await uploadWithFallback(bgFile, bgPath, {
+              preCompressed: fileHeroBg._compressed,
+              maxWidth: 1400,
+              maxHeight: 900,
+              quality: 0.78,
+              maxSizeBytes: 140 * 1024
+            });
+            currentBackgroundUrl = bgUrl;
+          })()
+        );
       }
 
-      const promoFile = document.getElementById("file-hero-promo").files[0];
       if (promoFile) {
-        try {
-          const promoRef = ref(storage, `hero/promo_${Date.now()}_${promoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
-          const snap = await uploadBytes(promoRef, promoFile);
-          promoUrl = await getDownloadURL(snap.ref);
-        } catch (e) {
-          console.warn("Storage upload failed for hero promo, using preview src:", e);
-          promoUrl = document.getElementById("preview-hero-promo").src;
-        }
+        uploadTasks.push(
+          (async () => {
+            const promoPath = `hero/promo_${Date.now()}_${promoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+            promoUrl = await uploadWithFallback(promoFile, promoPath, {
+              preCompressed: fileHeroPromo._compressed,
+              maxWidth: 1200,
+              maxHeight: 800,
+              quality: 0.8,
+              maxSizeBytes: 120 * 1024
+            });
+            currentPromoImageUrl = promoUrl;
+          })()
+        );
+      }
+
+      if (uploadTasks.length > 0) {
+        await Promise.all(uploadTasks);
       }
 
       const updateData = {
@@ -109,6 +150,11 @@ export async function initAdminHero() {
       };
 
       await setDoc(doc(db, "hero", "main"), updateData, { merge: true });
+
+      // Clear file inputs so re-submitting doesn't re-upload
+      if (fileHeroBg) fileHeroBg.value = "";
+      if (fileHeroPromo) fileHeroPromo.value = "";
+
       await adminAlert("Pengaturan Hero & Banner Promo berhasil disimpan!", "Berhasil Disimpan", "success");
 
     } catch (err) {
@@ -117,24 +163,6 @@ export async function initAdminHero() {
     } finally {
       btnSave.disabled = false;
       btnSave.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Perubahan Hero';
-    }
-  });
-}
-
-function setupFilePreview(inputId, imgId) {
-  const fileInput = document.getElementById(inputId);
-  const img = document.getElementById(imgId);
-  if (!fileInput || !img) return;
-
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        img.src = e.target.result;
-        img.style.display = "block";
-      };
-      reader.readAsDataURL(file);
     }
   });
 }

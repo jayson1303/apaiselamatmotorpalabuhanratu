@@ -5,22 +5,24 @@
 
 import { 
   db, 
-  storage, 
   collection, 
   getDocs, 
   doc, 
   setDoc, 
   addDoc, 
-  deleteDoc, 
-  ref, 
-  uploadBytes, 
-  getDownloadURL 
+  deleteDoc 
 } from "../../js/firebase-config.js";
 
 import { adminAlert, adminConfirm } from "./admin-dialogs.js";
+import { 
+  uploadWithFallback, 
+  setupCompressedPreview, 
+  formatAdminImageUrl 
+} from "./image-utils.js";
 
 let testimonialsList = [];
 let editingTestiId = null;
+let currentTestiFoto = "";
 
 export async function initAdminTestimonials() {
   await loadTestimonialsTable();
@@ -38,20 +40,15 @@ export async function initAdminTestimonials() {
     btnClose.addEventListener("click", () => modal.classList.remove("active"));
   }
 
-  // File preview
+  // File preview with client-side compression
   const fileInput = document.getElementById("testi-input-foto");
   const imgPreview = document.getElementById("preview-testi-img");
   if (fileInput && imgPreview) {
-    fileInput.addEventListener("change", () => {
-      const file = fileInput.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          imgPreview.src = e.target.result;
-          imgPreview.style.display = "block";
-        };
-        reader.readAsDataURL(file);
-      }
+    setupCompressedPreview(fileInput, imgPreview, {
+      maxWidth: 500,
+      maxHeight: 500,
+      quality: 0.78,
+      maxSizeBytes: 45 * 1024
     });
   }
 
@@ -108,10 +105,11 @@ function renderTestimonialsTable() {
 
   tbody.innerHTML = "";
   testimonialsList.forEach(t => {
+    const photoUrl = formatAdminImageUrl(t.foto);
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
-        <img src="${t.foto || '../assets/img/logo/logo.png'}" alt="${t.nama}" class="table-thumb" onerror="this.src='../assets/img/logo/logo.png'">
+        <img src="${photoUrl}" alt="${t.nama || 'Konsumen'}" class="table-thumb" onerror="this.src='../assets/img/logo/logo.png'">
       </td>
       <td><strong>${t.nama || 'Konsumen'}</strong></td>
       <td>
@@ -148,21 +146,25 @@ function openTestiModal(data = null) {
 
   if (!modal) return;
   fileInput.value = "";
+  fileInput._compressed = null;
 
   if (data) {
     editingTestiId = data.id;
+    currentTestiFoto = data.foto || "";
     modalTitle.textContent = "Edit Testimoni Konsumen";
     inputNama.value = data.nama || "";
     inputRating.value = data.rating || 5;
     inputKomentar.value = data.komentar || "";
-    if (data.foto) {
-      imgPreview.src = data.foto;
+    if (currentTestiFoto) {
+      imgPreview.src = formatAdminImageUrl(currentTestiFoto);
       imgPreview.style.display = "block";
     } else {
+      imgPreview.src = "";
       imgPreview.style.display = "none";
     }
   } else {
     editingTestiId = null;
+    currentTestiFoto = "";
     modalTitle.textContent = "Tambah Testimoni Baru";
     inputNama.value = "";
     inputRating.value = 5;
@@ -185,19 +187,20 @@ async function handleSaveTestimonial(e) {
     const rating = parseInt(document.getElementById("testi-input-rating").value);
     const komentar = document.getElementById("testi-input-komentar").value.trim();
     const fileInput = document.getElementById("testi-input-foto");
-    const imgPreview = document.getElementById("preview-testi-img");
 
-    let fotoUrl = imgPreview ? imgPreview.src : "";
-    const file = fileInput?.files[0];
+    let fotoUrl = currentTestiFoto || "";
+    const file = fileInput?.files?.[0];
+
     if (file) {
-      try {
-        const fileRef = ref(storage, `testimonials/testi_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
-        const snap = await uploadBytes(fileRef, file);
-        fotoUrl = await getDownloadURL(snap.ref);
-      } catch (e) {
-        console.warn("Storage upload failed for testimonial, using preview src:", e);
-        fotoUrl = imgPreview ? imgPreview.src : fotoUrl;
-      }
+      const filePath = `testimonials/testi_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      fotoUrl = await uploadWithFallback(file, filePath, {
+        preCompressed: fileInput._compressed,
+        maxWidth: 500,
+        maxHeight: 500,
+        quality: 0.78,
+        maxSizeBytes: 45 * 1024
+      });
+      currentTestiFoto = fotoUrl;
     }
 
     const payload = {
@@ -212,6 +215,12 @@ async function handleSaveTestimonial(e) {
       await setDoc(doc(db, "testimonials", editingTestiId), payload, { merge: true });
     } else {
       await addDoc(collection(db, "testimonials"), payload);
+    }
+
+    // Reset input
+    if (fileInput) {
+      fileInput.value = "";
+      fileInput._compressed = null;
     }
 
     document.getElementById("modal-testi").classList.remove("active");

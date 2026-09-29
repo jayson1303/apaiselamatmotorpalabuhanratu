@@ -5,17 +5,13 @@
 
 import { 
   db, 
-  storage, 
   collection, 
   getDocs, 
   doc, 
   getDoc,
   setDoc, 
   addDoc, 
-  deleteDoc, 
-  ref, 
-  uploadBytes, 
-  getDownloadURL 
+  deleteDoc 
 } from "../../js/firebase-config.js";
 
 import { formatRupiah } from "../../js/product-detail.js";
@@ -26,6 +22,11 @@ import {
   adminPromptDp, 
   adminPromptCategory 
 } from "./admin-dialogs.js";
+import { 
+  uploadWithFallback, 
+  setupCompressedPreview, 
+  formatAdminImageUrl 
+} from "./image-utils.js";
 
 const DEFAULT_CATEGORIES = [
   "ADV Series",
@@ -606,19 +607,16 @@ function addColorVariantRow(variant = { nama: "", foto: "" }, index = null) {
     <button type="button" class="btn-tbl-delete btn-del-variant" title="Hapus varian" style="padding: 6px 10px;"><i class="fa-solid fa-trash"></i></button>
   `;
 
-  // File change preview & base64 capture
+  // File change preview & base64 capture with instant client-side compression
   const fileInput = row.querySelector(".variant-file");
   const imgPreview = row.querySelector(".variant-preview-img");
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        imgPreview.src = e.target.result;
-        row.dataset.newBase64 = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    }
+  setupCompressedPreview(fileInput, imgPreview, {
+    maxWidth: 800,
+    maxHeight: 600,
+    quality: 0.8,
+    maxSizeBytes: 50 * 1024
+  }, (compressed) => {
+    row.dataset.newBase64 = compressed.dataUrl;
   });
 
   // Delete row
@@ -701,31 +699,31 @@ async function handleSaveProduct(e) {
     const hargaCashAsuransi = parseInt(document.getElementById("prod-input-cash").value) || 0;
     const deskripsiSingkat = document.getElementById("prod-input-desc").value.trim();
 
-    // Collect Color Variants & Upload photos
+    // Collect Color Variants & Upload photos in parallel
     const colorRows = document.querySelectorAll(".color-variant-row");
-    const warnaList = [];
-
-    for (const r of colorRows) {
+    const variantPromises = Array.from(colorRows).map(async (r) => {
       const name = r.querySelector(".variant-name").value.trim() || "Standar";
       const fileInput = r.querySelector(".variant-file");
       let fotoUrl = r.dataset.originalFoto || "assets/img/logo/logo.png";
 
-      if (fileInput && fileInput.files[0]) {
+      if (fileInput && fileInput.files && fileInput.files[0]) {
         const file = fileInput.files[0];
-        try {
-          const fileRef = ref(storage, `products/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
-          const snap = await uploadBytes(fileRef, file);
-          fotoUrl = await getDownloadURL(snap.ref);
-        } catch (uploadErr) {
-          console.warn("Storage upload failed, using local base64 fallback:", uploadErr);
-          fotoUrl = r.dataset.newBase64 || fotoUrl;
-        }
+        const filePath = `products/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        fotoUrl = await uploadWithFallback(file, filePath, {
+          preCompressed: fileInput._compressed,
+          maxWidth: 800,
+          maxHeight: 600,
+          quality: 0.8,
+          maxSizeBytes: 50 * 1024
+        });
       } else if (r.dataset.newBase64) {
         fotoUrl = r.dataset.newBase64;
       }
 
-      warnaList.push({ nama: name, foto: fotoUrl });
-    }
+      return { nama: name, foto: fotoUrl };
+    });
+
+    const warnaList = await Promise.all(variantPromises);
 
     if (warnaList.length === 0) {
       warnaList.push({ nama: "Standar", foto: "assets/img/logo/logo.png" });

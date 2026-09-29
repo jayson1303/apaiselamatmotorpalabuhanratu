@@ -5,20 +5,25 @@
 
 import { 
   db, 
-  storage, 
   doc, 
   getDoc, 
-  setDoc, 
-  ref, 
-  uploadBytes, 
-  getDownloadURL 
+  setDoc 
 } from "../../js/firebase-config.js";
 
 import { adminAlert } from "./admin-dialogs.js";
+import { 
+  uploadWithFallback, 
+  setupCompressedPreview, 
+  formatAdminImageUrl 
+} from "./image-utils.js";
 
 export async function initAdminAbout() {
   const form = document.getElementById("form-about");
   if (!form) return;
+
+  let currentAboutFoto = "";
+  const fileInput = document.getElementById("file-about-img");
+  const imgPreview = document.getElementById("preview-about-img");
 
   try {
     const snap = await getDoc(doc(db, "about", "main"));
@@ -31,33 +36,27 @@ export async function initAdminAbout() {
       data = defaults.about || {};
     }
 
+    currentAboutFoto = data.foto || "";
+
     document.getElementById("about-input-title").value = data.title || "";
     document.getElementById("about-input-desc").value = data.deskripsi || "";
 
-    if (data.foto) {
-      const img = document.getElementById("preview-about-img");
-      img.src = data.foto;
-      img.style.display = "block";
+    if (currentAboutFoto && imgPreview) {
+      imgPreview.src = formatAdminImageUrl(currentAboutFoto);
+      imgPreview.style.display = "block";
     }
 
   } catch (err) {
     console.error("Error loading about data:", err);
   }
 
-  // File preview
-  const fileInput = document.getElementById("file-about-img");
-  const imgPreview = document.getElementById("preview-about-img");
+  // Setup client-side compressed preview on file selection
   if (fileInput && imgPreview) {
-    fileInput.addEventListener("change", () => {
-      const file = fileInput.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          imgPreview.src = e.target.result;
-          imgPreview.style.display = "block";
-        };
-        reader.readAsDataURL(file);
-      }
+    setupCompressedPreview(fileInput, imgPreview, {
+      maxWidth: 1000,
+      maxHeight: 800,
+      quality: 0.8,
+      maxSizeBytes: 80 * 1024
     });
   }
 
@@ -71,18 +70,19 @@ export async function initAdminAbout() {
     try {
       const title = document.getElementById("about-input-title").value.trim();
       const deskripsi = document.getElementById("about-input-desc").value.trim();
-      let fotoUrl = imgPreview ? imgPreview.src : "";
+      let fotoUrl = currentAboutFoto || "";
 
-      const file = fileInput?.files[0];
+      const file = fileInput?.files?.[0];
       if (file) {
-        try {
-          const fileRef = ref(storage, `about/about_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
-          const snap = await uploadBytes(fileRef, file);
-          fotoUrl = await getDownloadURL(snap.ref);
-        } catch (e) {
-          console.warn("Storage upload failed for about photo, using preview src:", e);
-          fotoUrl = imgPreview ? imgPreview.src : fotoUrl;
-        }
+        const filePath = `about/about_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        fotoUrl = await uploadWithFallback(file, filePath, {
+          preCompressed: fileInput._compressed,
+          maxWidth: 1000,
+          maxHeight: 800,
+          quality: 0.8,
+          maxSizeBytes: 80 * 1024
+        });
+        currentAboutFoto = fotoUrl;
       }
 
       const updateData = {
@@ -93,6 +93,12 @@ export async function initAdminAbout() {
       };
 
       await setDoc(doc(db, "about", "main"), updateData, { merge: true });
+
+      if (fileInput) {
+        fileInput.value = "";
+        fileInput._compressed = null;
+      }
+
       await adminAlert("Bagian Tentang Kami berhasil diperbarui!", "Berhasil Disimpan", "success");
 
     } catch (err) {
