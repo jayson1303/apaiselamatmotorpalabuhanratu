@@ -48,7 +48,7 @@ export async function initAdminTestimonials() {
       maxWidth: 500,
       maxHeight: 500,
       quality: 0.78,
-      maxSizeBytes: 45 * 1024
+      maxSizeBytes: 180 * 1024
     });
   }
 
@@ -72,19 +72,13 @@ async function loadTestimonialsTable() {
       testimonialsList.push({ id: d.id, ...d.data() });
     });
 
-    if (testimonialsList.length === 0) {
-      // Fallback
-      const res = await fetch("../data/seed-testimonials.json");
-      testimonialsList = await res.json();
-    }
   } catch (err) {
-    console.warn("Firestore error, loading fallback testimonials:", err);
-    try {
-      const res = await fetch("../data/seed-testimonials.json");
-      testimonialsList = await res.json();
-    } catch (e) {
-      testimonialsList = [];
-    }
+    console.error("Gagal memuat testimoni dari Firestore:", err);
+    testimonialsList = [];
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 24px; color: #B91C1C;">Gagal memuat testimoni. Periksa koneksi dan izin Firebase.</td></tr>`;
+    const badgeCount = document.getElementById("metric-testi-count");
+    if (badgeCount) badgeCount.textContent = "—";
+    return;
   }
 
   // Update counter
@@ -198,7 +192,7 @@ async function handleSaveTestimonial(e) {
         maxWidth: 500,
         maxHeight: 500,
         quality: 0.78,
-        maxSizeBytes: 45 * 1024
+        maxSizeBytes: 180 * 1024
       });
       currentTestiFoto = fotoUrl;
     }

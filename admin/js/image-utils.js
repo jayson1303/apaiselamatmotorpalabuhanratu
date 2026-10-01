@@ -172,7 +172,9 @@ export function compressImage(source, options = {}) {
  * @returns {Promise<string>} Download URL or optimized base64 string
  */
 export async function uploadWithFallback(file, storagePath, options = {}) {
-  const timeoutMs = options.timeoutMs || 3500; // 3.5 seconds max wait
+  // Image uploads can take longer on mobile or slow connections. A short
+  // timeout caused valid uploads to be stored as base64 in Firestore instead.
+  const timeoutMs = options.timeoutMs || 30000;
 
   // 1. Ensure compressed version exists
   let compressed = options.preCompressed;
@@ -237,6 +239,8 @@ export function setupCompressedPreview(fileInput, imgPreview, options = {}, onDo
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files && fileInput.files[0];
     if (!file) return;
+    // Never reuse a previous selection's compressed image if this preview fails.
+    fileInput._compressed = null;
 
     if (imgPreview) {
       imgPreview.style.opacity = "0.5";
