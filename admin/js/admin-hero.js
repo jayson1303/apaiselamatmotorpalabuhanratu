@@ -32,17 +32,21 @@ export async function initAdminHero() {
   // Load current hero data
   try {
     const snap = await getDoc(doc(db, "hero", "main"));
-    let data = {};
-    if (snap.exists()) {
-      data = snap.data();
-    } else {
+    let defaults = {};
+    try {
       const res = await fetch("../data/default-settings.json");
-      const defaults = await res.json();
-      data = defaults.hero || {};
+      defaults = (await res.json()).hero || {};
+    } catch (defaultError) {
+      console.warn("Pengaturan hero default tidak dapat dimuat:", defaultError);
+    }
+    let data = { ...defaults };
+    if (snap.exists()) {
+      data = { ...data, ...snap.data() };
     }
 
-    currentBackgroundUrl = data.backgroundUrl || "";
-    currentPromoImageUrl = data.promoImageUrl || "";
+    // Empty legacy fields must not erase the working site defaults.
+    currentBackgroundUrl = data.backgroundUrl || defaults.backgroundUrl || "";
+    currentPromoImageUrl = data.promoImageUrl || defaults.promoImageUrl || "";
 
     // Populate inputs
     document.getElementById("hero-input-title").value = data.title || "";
@@ -138,6 +142,10 @@ export async function initAdminHero() {
         await Promise.all(uploadTasks);
       }
 
+      if (!bgUrl || !promoUrl) {
+        throw new Error("URL gambar background atau promo kosong. Silakan pilih gambar lalu coba simpan kembali.");
+      }
+
       const updateData = {
         title,
         subtitle,
@@ -150,6 +158,14 @@ export async function initAdminHero() {
       };
 
       await setDoc(doc(db, "hero", "main"), updateData, { merge: true });
+      const savedHero = await getDoc(doc(db, "hero", "main"));
+      if (!savedHero.exists() || savedHero.data().backgroundUrl !== bgUrl || savedHero.data().promoImageUrl !== promoUrl) {
+        throw new Error("Pengaturan belum terkonfirmasi tersimpan. Periksa koneksi dan izin Firestore.");
+      }
+      currentBackgroundUrl = bgUrl;
+      currentPromoImageUrl = promoUrl;
+      if (previewHeroBg) previewHeroBg.src = formatAdminImageUrl(bgUrl);
+      if (previewHeroPromo) previewHeroPromo.src = formatAdminImageUrl(promoUrl);
 
       // Clear file inputs so re-submitting doesn't re-upload
       if (fileHeroBg) fileHeroBg.value = "";

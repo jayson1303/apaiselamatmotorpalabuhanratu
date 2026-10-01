@@ -53,6 +53,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 // 1. Settings, Hero, About & Contact Loader
 // ==========================================================================
 async function loadSettings() {
+  let defaults = {};
+  try {
+    const defaultsResponse = await fetch("data/default-settings.json");
+    defaults = await defaultsResponse.json();
+  } catch (err) {
+    console.warn("Pengaturan default tidak dapat dimuat:", err);
+  }
+
   try {
     // Try fetching from Firestore
     const contactSnap = await getDoc(doc(db, "settings", "contact"));
@@ -60,18 +68,17 @@ async function loadSettings() {
     const heroSnap = await getDoc(doc(db, "hero", "main"));
     const aboutSnap = await getDoc(doc(db, "about", "main"));
 
-    let settings = {};
-
-    if (contactSnap.exists() || heroSnap.exists() || aboutSnap.exists()) {
-      settings.contact = contactSnap.exists() ? contactSnap.data() : null;
-      settings.waTemplate = waTemplateSnap.exists() ? waTemplateSnap.data() : null;
-      settings.hero = heroSnap.exists() ? heroSnap.data() : null;
-      settings.about = aboutSnap.exists() ? aboutSnap.data() : null;
-    } else {
-      // Fallback to local default-settings.json
-      const res = await fetch("data/default-settings.json");
-      settings = await res.json();
-    }
+    // Merge per section: creating one Firestore settings document must not
+    // discard defaults for the other sections or blank legacy hero fields.
+    const settings = {
+      ...defaults,
+      contact: { ...(defaults.contact || {}), ...(contactSnap.exists() ? contactSnap.data() : {}) },
+      waTemplate: { ...(defaults.waTemplate || {}), ...(waTemplateSnap.exists() ? waTemplateSnap.data() : {}) },
+      hero: { ...(defaults.hero || {}), ...(heroSnap.exists() ? heroSnap.data() : {}) },
+      about: { ...(defaults.about || {}), ...(aboutSnap.exists() ? aboutSnap.data() : {}) }
+    };
+    if (!settings.hero.backgroundUrl) settings.hero.backgroundUrl = defaults.hero?.backgroundUrl || "";
+    if (!settings.hero.promoImageUrl) settings.hero.promoImageUrl = defaults.hero?.promoImageUrl || "";
 
     appSettings = settings;
     renderHero(settings.hero);
@@ -84,8 +91,7 @@ async function loadSettings() {
   } catch (err) {
     console.warn("Firestore settings load failed, using fallback:", err);
     try {
-      const res = await fetch("data/default-settings.json");
-      appSettings = await res.json();
+      appSettings = defaults;
       renderHero(appSettings.hero);
       renderAbout(appSettings.about);
       renderContact(appSettings.contact);
