@@ -15,6 +15,22 @@
   
   <!-- Custom CSS -->
   <link rel="stylesheet" href="css/style.css">
+
+  <!-- Immediate Hero Cache Hydration: Langsung tampilkan background terbaru saat refresh/loading tanpa kedip -->
+  <script>
+    (function() {
+      try {
+        var cachedHero = JSON.parse(localStorage.getItem("asm_hero_cache") || "null");
+        if (cachedHero && cachedHero.backgroundUrl) {
+          var bg = cachedHero.backgroundUrl;
+          if (cachedHero.updatedAt && !bg.startsWith("data:")) {
+            bg += (bg.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(cachedHero.updatedAt);
+          }
+          document.documentElement.style.setProperty('--hero-bg-image', 'url("' + bg + '")');
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
 
@@ -79,12 +95,10 @@
           <i class="fa-solid fa-certificate"></i> Dealer Resmi Motor Honda
         </div>
         <h1 class="hero-title" id="hero-title">
-          APAI SELAMAT MOTOR
-          <span id="hero-subtitle">PALABUHANRATU</span>
+          <span id="hero-title-main">Dealer Resmi Sepeda Motor Honda</span>
+          <span id="hero-subtitle">APAI SELAMAT MOTOR PALABUHANRATU</span>
         </h1>
-        <p class="hero-desc" id="hero-tagline">
-          Dapatkan promo DP spesial, angsuran super hemat, proses 1 hari langsung ACC, dan gratis pengantaran unit sampai ke depan pintu rumah Anda!
-        </p>
+        <p class="hero-desc" id="hero-tagline">Dapatkan Promo DP Ringan, Angsuran Terjangkau, Diskon Spesial, dan Proses Cepat Mudah Terpercaya!</p>
 
         <div class="hero-actions">
           <a href="#produk" class="btn-primary" id="hero-cta-btn">
@@ -115,11 +129,54 @@
         </div>
       </div>
 
-      <!-- Hero Overlay Promo Banner -->
-      <div class="hero-promo-wrapper" id="hero-promo-wrapper">
-        <div class="hero-promo-card">
-          <span class="hero-promo-tag" id="hero-promo-tag"><i class="fa-solid fa-bolt"></i> PROMO SPESIAL</span>
-          <img src="assets/img/hero/promo-banner.jpg" alt="Promo Honda Palabuhanratu" class="hero-promo-img" id="hero-promo-img">
+      <!-- Hero Overlay Promo Banner (3 Kartu Bergantian) -->
+      <div class="hero-promo-wrapper" id="hero-promo-wrapper" aria-label="Promo Honda Spesial">
+        <div class="hero-promo-stack" id="hero-promo-stack">
+          <!-- Card 1 (Depan / Muncul) -->
+          <div class="hero-promo-card promo-pos-front" data-index="0" title="Klik untuk konsultasi promo WhatsApp">
+            <span class="hero-promo-tag"><i class="fa-solid fa-bolt"></i> PROMO SPESIAL</span>
+            <img src="promo/promo-1.jpg" onerror="this.onerror=null;this.src='assets/img/hero/promo-banner.jpg';" alt="Promo Honda 1" class="hero-promo-img" id="hero-promo-img">
+            <script>
+              (function() {
+                try {
+                  var cached = JSON.parse(localStorage.getItem("asm_hero_cache") || "null");
+                  if (cached) {
+                    if (cached.promoActive === false) {
+                      var wrap = document.getElementById("hero-promo-wrapper");
+                      if (wrap) wrap.style.display = "none";
+                    } else if (cached.promoImageUrl) {
+                      var img = document.getElementById("hero-promo-img");
+                      if (img) img.src = cached.promoImageUrl;
+                    }
+                  }
+                } catch (e) {}
+              })();
+            </script>
+          </div>
+          <!-- Card 2 (Belakang Kanan) -->
+          <div class="hero-promo-card promo-pos-next" data-index="1" title="Klik untuk menampilkan ke depan">
+            <span class="hero-promo-tag"><i class="fa-solid fa-bolt"></i> PROMO SPESIAL</span>
+            <img src="promo/promo-2.jpg" onerror="this.onerror=null;this.src='promo/promo-1.jpg';" alt="Promo Honda 2" class="hero-promo-img">
+          </div>
+          <!-- Card 3 (Belakang Kiri) -->
+          <div class="hero-promo-card promo-pos-prev" data-index="2" title="Klik untuk menampilkan ke depan">
+            <span class="hero-promo-tag"><i class="fa-solid fa-bolt"></i> PROMO SPESIAL</span>
+            <img src="promo/promo-3.jpg" onerror="this.onerror=null;this.src='assets/img/hero/promo-banner.jpg';" alt="Promo Honda 3" class="hero-promo-img">
+          </div>
+        </div>
+        <!-- Kontrol Navigasi & Dots -->
+        <div class="hero-promo-controls">
+          <button type="button" class="promo-nav-btn promo-prev-btn" id="promo-prev-btn" aria-label="Promo Sebelumnya" title="Promo Sebelumnya">
+            <i class="fa-solid fa-chevron-left"></i>
+          </button>
+          <div class="hero-promo-dots" id="hero-promo-dots">
+            <button type="button" class="promo-dot active" data-index="0" aria-label="Lihat Promo 1"></button>
+            <button type="button" class="promo-dot" data-index="1" aria-label="Lihat Promo 2"></button>
+            <button type="button" class="promo-dot" data-index="2" aria-label="Lihat Promo 3"></button>
+          </div>
+          <button type="button" class="promo-nav-btn promo-next-btn" id="promo-next-btn" aria-label="Promo Berikutnya" title="Promo Berikutnya">
+            <i class="fa-solid fa-chevron-right"></i>
+          </button>
         </div>
       </div>
     </div>

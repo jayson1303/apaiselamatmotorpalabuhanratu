@@ -7,6 +7,7 @@ import {
   db, 
   doc, 
   getDoc, 
+  getDocFromServer,
   setDoc 
 } from "../../js/firebase-config.js";
 
@@ -31,7 +32,13 @@ export async function initAdminHero() {
 
   // Load current hero data
   try {
-    const snap = await getDoc(doc(db, "hero", "main"));
+    let snap;
+    try {
+      snap = await getDocFromServer(doc(db, "hero", "main"));
+    } catch (serverError) {
+      console.warn("Gagal membaca hero terbaru dari server, memakai cache:", serverError);
+      snap = await getDoc(doc(db, "hero", "main"));
+    }
     let defaults = {};
     try {
       const res = await fetch("../data/default-settings.json");
@@ -158,7 +165,7 @@ export async function initAdminHero() {
       };
 
       await setDoc(doc(db, "hero", "main"), updateData, { merge: true });
-      const savedHero = await getDoc(doc(db, "hero", "main"));
+      const savedHero = await getDocFromServer(doc(db, "hero", "main"));
       if (!savedHero.exists() || savedHero.data().backgroundUrl !== bgUrl || savedHero.data().promoImageUrl !== promoUrl) {
         throw new Error("Pengaturan belum terkonfirmasi tersimpan. Periksa koneksi dan izin Firestore.");
       }

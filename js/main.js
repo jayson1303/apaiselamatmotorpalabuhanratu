@@ -9,6 +9,7 @@ import {
   getDocs, 
   doc, 
   getDoc,
+  getDocFromServer,
   onSnapshot 
 } from "./firebase-config.js";
 
@@ -40,6 +41,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initCategoryFilters();
   initSearch();
   initScrollSpy();
+  initPromoStack();
 
   // Load All Data
   await Promise.all([
@@ -63,10 +65,20 @@ async function loadSettings() {
 
   try {
     // Try fetching from Firestore
-    const contactSnap = await getDoc(doc(db, "settings", "contact"));
-    const waTemplateSnap = await getDoc(doc(db, "settings", "waTemplate"));
-    const heroSnap = await getDoc(doc(db, "hero", "main"));
-    const aboutSnap = await getDoc(doc(db, "about", "main"));
+    const readFresh = async (reference) => {
+      try {
+        return await getDocFromServer(reference);
+      } catch (error) {
+        console.warn("Server Firestore tidak tersedia, gunakan cache:", error.message);
+        return await getDoc(reference);
+      }
+    };
+    const [contactSnap, waTemplateSnap, heroSnap, aboutSnap] = await Promise.all([
+      readFresh(doc(db, "settings", "contact")),
+      readFresh(doc(db, "settings", "waTemplate")),
+      readFresh(doc(db, "hero", "main")),
+      readFresh(doc(db, "about", "main"))
+    ]);
 
     // Merge per section: creating one Firestore settings document must not
     // discard defaults for the other sections or blank legacy hero fields.
@@ -92,7 +104,7 @@ async function loadSettings() {
     console.warn("Firestore settings load failed, using fallback:", err);
     try {
       appSettings = defaults;
-      renderHero(appSettings.hero);
+      renderHero(appSettings.hero || {});
       renderAbout(appSettings.about);
       renderContact(appSettings.contact);
     } catch (e) {
@@ -104,53 +116,77 @@ async function loadSettings() {
 function setupRealtimeSettings() {
   try {
     onSnapshot(doc(db, "hero", "main"), (snap) => {
-      if (snap.exists()) {
-        appSettings.hero = snap.data();
-        renderHero(appSettings.hero);
-      }
-    });
+      // The first snapshot may come from an old local cache. The server read
+      // above is authoritative; ignore cached events that could roll it back.
+      if (snap.metadata.fromCache || !snap.exists()) return;
+      appSettings.hero = { ...(appSettings.hero || {}), ...snap.data() };
+      renderHero(appSettings.hero);
+    }, (error) => console.warn("Listener hero gagal:", error));
 
     onSnapshot(doc(db, "about", "main"), (snap) => {
+      if (snap.metadata.fromCache) return;
       if (snap.exists()) {
         appSettings.about = snap.data();
         renderAbout(appSettings.about);
       }
-    });
+    }, (error) => console.warn("Listener about gagal:", error));
 
     onSnapshot(doc(db, "settings", "contact"), (snap) => {
+      if (snap.metadata.fromCache) return;
       if (snap.exists()) {
         appSettings.contact = snap.data();
         renderContact(appSettings.contact);
       }
-    });
+    }, (error) => console.warn("Listener kontak gagal:", error));
 
     onSnapshot(doc(db, "settings", "waTemplate"), (snap) => {
+      if (snap.metadata.fromCache) return;
       if (snap.exists()) {
         appSettings.waTemplate = snap.data();
       }
-    });
+    }, (error) => console.warn("Listener template gagal:", error));
   } catch (e) {
     console.log("Realtime listener disabled:", e.message);
   }
 }
 
 function renderHero(hero) {
-  if (!hero) return;
+  hero = hero || {};
 
   const heroSection = document.getElementById("beranda");
   const heroTitle = document.getElementById("hero-title");
+  const heroTitleMain = document.getElementById("hero-title-main");
   const heroSubtitle = document.getElementById("hero-subtitle");
   const heroTagline = document.getElementById("hero-tagline");
   const heroCtaBtn = document.getElementById("hero-cta-btn");
   const heroPromoWrapper = document.getElementById("hero-promo-wrapper");
-  const heroPromoImg = document.getElementById("hero-promo-img");
 
-  if (hero.backgroundUrl) {
-    heroSection.style.backgroundImage = `url('${hero.backgroundUrl}')`;
+  // Jangan pernah tambahkan parameter cache-buster (?v=...) pada data: URI (base64)
+  const withHeroVersion = (url) => {
+    if (!url || !hero.updatedAt || url.startsWith("data:")) return url || "";
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}v=${encodeURIComponent(hero.updatedAt)}`;
+  };
+
+  const backgroundUrl = withHeroVersion(hero.backgroundUrl);
+  const promoEnabled = hero.promoActive !== false;
+
+  // Terapkan foto background hero dari Firebase atau aset lokal
+  if (heroSection) {
+    if (backgroundUrl) {
+      heroSection.style.backgroundImage = `url("${backgroundUrl}")`;
+    } else {
+      heroSection.style.backgroundImage = `url("assets/img/hero/hero-bg.jpg")`;
+    }
   }
 
-  if (hero.title && heroTitle) {
-    heroTitle.childNodes[0].textContent = hero.title + " ";
+  // Teks judul, subjudul, dan tagline
+  if (hero.title) {
+    if (heroTitleMain) {
+      heroTitleMain.textContent = hero.title;
+    } else if (heroTitle && heroTitle.childNodes.length > 0) {
+      heroTitle.childNodes[0].textContent = hero.title + " ";
+    }
   }
   if (hero.subtitle && heroSubtitle) {
     heroSubtitle.textContent = hero.subtitle;
@@ -162,15 +198,154 @@ function renderHero(hero) {
     heroCtaBtn.innerHTML = `<i class="fa-solid fa-motorcycle"></i> ${hero.ctaText}`;
   }
 
-  // Promo Banner Overlay Logic
-  if (heroPromoWrapper && heroPromoImg) {
-    if (hero.promoActive !== false && hero.promoImageUrl && hero.promoImageUrl.trim() !== "") {
-      heroPromoImg.src = hero.promoImageUrl;
-      heroPromoWrapper.style.display = "flex";
-    } else {
-      heroPromoWrapper.style.display = "none";
+  // Tampilkan atau sembunyikan banner promo overlay
+  if (heroPromoWrapper) {
+    heroPromoWrapper.style.display = promoEnabled ? "flex" : "none";
+  }
+}
+
+// ==========================================================================
+// Inisialisasi 3 Kartu Banner Promo Bergantian di Depan
+// ==========================================================================
+function initPromoStack() {
+  const stack = document.getElementById("hero-promo-stack");
+  const wrapper = document.getElementById("hero-promo-wrapper");
+  if (!stack || !wrapper) return;
+
+  const cards = Array.from(stack.querySelectorAll(".hero-promo-card"));
+  const dots = Array.from(wrapper.querySelectorAll(".promo-dot"));
+  const prevBtn = document.getElementById("promo-prev-btn");
+  const nextBtn = document.getElementById("promo-next-btn");
+
+  if (cards.length < 3) return;
+
+  let currentIndex = 0;
+  let autoPlayTimer = null;
+  const ROTATE_INTERVAL = 4000; // 4 detik berpindah bergantian
+
+  function updatePositions() {
+    cards.forEach((card, index) => {
+      card.classList.remove("promo-pos-front", "promo-pos-next", "promo-pos-prev");
+
+      const pos = (index - currentIndex + 3) % 3;
+      if (pos === 0) {
+        card.classList.add("promo-pos-front");
+        card.setAttribute("aria-hidden", "false");
+      } else if (pos === 1) {
+        card.classList.add("promo-pos-next");
+        card.setAttribute("aria-hidden", "true");
+      } else {
+        card.classList.add("promo-pos-prev");
+        card.setAttribute("aria-hidden", "true");
+      }
+    });
+
+    dots.forEach((dot, index) => {
+      dot.classList.toggle("active", index === currentIndex);
+    });
+  }
+
+  function goTo(index) {
+    currentIndex = (index + 3) % 3;
+    updatePositions();
+  }
+
+  function next() {
+    goTo(currentIndex + 1);
+  }
+
+  function prev() {
+    goTo(currentIndex - 1);
+  }
+
+  function startAutoPlay() {
+    stopAutoPlay();
+    autoPlayTimer = setInterval(next, ROTATE_INTERVAL);
+  }
+
+  function stopAutoPlay() {
+    if (autoPlayTimer) {
+      clearInterval(autoPlayTimer);
+      autoPlayTimer = null;
     }
   }
+
+  // Klik kartu di stack
+  cards.forEach((card, index) => {
+    card.addEventListener("click", () => {
+      if (currentIndex !== index) {
+        // Klik kartu di belakang langsung memindahkannya ke posisi depan
+        goTo(index);
+        startAutoPlay();
+      } else {
+        // Klik kartu posisi depan membuka WhatsApp untuk konsultasi promo
+        const waBtn = document.getElementById("hero-wa-btn") || document.getElementById("mobile-wa-cta");
+        if (waBtn && waBtn.href) {
+          window.open(waBtn.href, "_blank", "noopener,noreferrer");
+        }
+      }
+    });
+  });
+
+  // Tombol navigasi panah
+  if (nextBtn) {
+    nextBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      next();
+      startAutoPlay();
+    });
+  }
+
+  if (prevBtn) {
+    prevBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      prev();
+      startAutoPlay();
+    });
+  }
+
+  // Tombol dots
+  dots.forEach((dot, index) => {
+    dot.addEventListener("click", (e) => {
+      e.stopPropagation();
+      goTo(index);
+      startAutoPlay();
+    });
+  });
+
+  // Hentikan rotasi otomatis saat kursor berada di atas promo
+  wrapper.addEventListener("mouseenter", stopAutoPlay);
+  wrapper.addEventListener("mouseleave", startAutoPlay);
+
+  // Swipe gesture untuk mobile
+  let touchStartX = 0;
+  let touchEndX = 0;
+
+  wrapper.addEventListener("touchstart", (e) => {
+    stopAutoPlay();
+    if (e.changedTouches && e.changedTouches[0]) {
+      touchStartX = e.changedTouches[0].screenX;
+    }
+  }, { passive: true });
+
+  wrapper.addEventListener("touchend", (e) => {
+    if (e.changedTouches && e.changedTouches[0]) {
+      touchEndX = e.changedTouches[0].screenX;
+      const diff = touchStartX - touchEndX;
+      if (Math.abs(diff) > 35) {
+        if (diff > 0) {
+          next();
+        } else {
+          prev();
+        }
+      }
+    }
+    startAutoPlay();
+  }, { passive: true });
+
+  // Tampilkan susunan awal & jalankan auto play
+  updatePositions();
+  startAutoPlay();
 }
 
 function renderAbout(about) {
@@ -238,27 +413,23 @@ async function loadProducts() {
     const querySnapshot = await getDocs(collection(db, "products"));
     const firestoreProducts = [];
 
-    querySnapshot.forEach(doc => {
-      firestoreProducts.push({
-        id: doc.id,
-        ...doc.data()
-      });
+    querySnapshot.forEach(productDoc => {
+      firestoreProducts.push({ id: productDoc.id, ...productDoc.data() });
     });
 
     if (firestoreProducts.length > 0) {
       allProducts = firestoreProducts;
     } else {
-      // Fallback to local JSON seed data
-      const res = await fetch("data/seed-products.json");
-      allProducts = await res.json();
+      const response = await fetch("data/seed-products.json");
+      allProducts = await response.json();
     }
   } catch (err) {
     console.warn("Firestore products load failed, loading fallback data:", err);
     try {
-      const res = await fetch("data/seed-products.json");
-      allProducts = await res.json();
-    } catch (e) {
-      console.error("Critical: Cannot load products fallback", e);
+      const response = await fetch("data/seed-products.json");
+      allProducts = await response.json();
+    } catch (fallbackError) {
+      console.error("Critical: Cannot load products fallback", fallbackError);
     }
   }
 
